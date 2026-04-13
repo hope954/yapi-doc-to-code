@@ -1,94 +1,150 @@
 ---
 name: yapi-doc-to-code
 description: >-
-  Fetches authenticated YApi project documentation using project id and token from
-  the chat, then generates TypeScript src/api/api.ts (business backend axios request
-  layer with param/response types and functions, not YApi open-API client code) and
-  src/models/model.ts (ModelBase/DataModel/Column from @model-base/core). Use when
-  the user mentions YApi, YApi 拉取, YApi 鉴权文档,
-  yapi-fetch, 生成 api, 自动生成 api, 生成 api.ts, 生成 model.ts, 请求层生成,
-  根据接口文档生成代码/模型/请求层, 根据鉴权后的接口文档生成代码, ModelBase,
-  operationId, or wants API/model codegen from online YApi docs without editing
-  project config files. First version: YApi only; no Vue/pages; not a Rule. Manual
-  trigger: skill name yapi-doc-to-code.
+  V1 负责拉取鉴权后的 YApi 文档并生成业务 `src/api/api.ts` 与
+  `src/models/model.ts`；V3 在此基础上整合 PRD、Figma、api.ts、model.ts，
+  输出 `page.manifest.json` 与 `cursor-page-prompt.md`，用于页面生成前的统一上下文准备。
 ---
 
-# YApi 文档驱动生成 api.ts / model.ts
+# YApi 文档生成与 V3 页面上下文 Skill
 
-面向聊天驱动：用户在对话中提供 **YApi 项目 id（`_yapi_uid`）** 与 **token（`_yapi_token`）**（及必要时 **YApi 服务根地址 base URL**），代理**仅将这些信息用于拉取 YApi 在线接口文档**；据此生成的是**业务后端接口**对应的 **`src/api/api.ts`**（业务请求层）与 **`src/models/model.ts`**，**不是**「调用 YApi 开放接口本身」的客户端代码。本能力为 **Skill**，不要实现为 Rule。
+本 skill 保留 V1 能力，并补充 V3 能力：
+- V1：从鉴权后的 YApi 文档生成业务 `api.ts` / `model.ts`
+- V3：基于 PRD、Figma、V1 产物整理页面上下文，输出 `page.manifest.json` 与 `cursor-page-prompt.md`
+
+## V1 能力：YApi 文档驱动生成 `api.ts` / `model.ts`
+
+面向聊天驱动：用户在对话中提供 **YApi 项目 id（`_yapi_uid`）** 与 **token（`_yapi_token`）**（及必要时 **YApi 服务根地址 base URL**），代理仅将这些信息用于拉取 YApi 在线接口文档；据此生成业务后端接口对应的 **`src/api/api.ts`** 与 **`src/models/model.ts`**。生成的是业务请求层，不是调用 YApi 开放接口本身的客户端代码。本能力为 Skill，不要实现为 Rule。
 
 ## 运行前提
 
-- **在线拉取**：Agent 执行「根据 `_yapi_uid`、`_yapi_token`、（必要时）YApi `base URL` 拉取 YApi 文档」时，运行环境须具备**可用的网络访问**（能请求用户给出的 YApi 服务地址）。无网络时不要假设一定能在线拉取成功。
-- **无法联网时**：向用户说明限制；尽量退化为由用户提供**其可访问的 YApi 导出内容**（如 JSON / Markdown 等粘贴或附件），再基于该内容生成代码。
-- **首版定位不变**：Skill 的第一目标仍是「在线拉取 YApi 文档并生成业务 `api.ts` / `model.ts`」；导出内容仅为联网失败或不方便时的退化路径。
+- 在线拉取时，运行环境须具备可用网络访问。
+- 无法联网时，向用户说明限制，并尽量退化为基于其提供的导出内容生成。
+- YApi 鉴权信息仅用于拉取文档，不得写入生成代码。
 
-## YApi 鉴权优先级（拉取文档阶段）
+## YApi 鉴权优先级
 
-- 当用户提供 `_yapi_uid` 与 `_yapi_token` 时，优先使用 **Cookie 鉴权** 拉取文档：`Cookie: _yapi_token=...; _yapi_uid=...`。
-- 若用户明确指定其他鉴权方式（如 query token），按用户要求执行；否则保持 Cookie 优先。
-- 上述鉴权信息仅用于「拉取 YApi 文档」，不得写入生成代码。
+- 当用户提供 `_yapi_uid` 与 `_yapi_token` 时，优先使用 Cookie 鉴权：`Cookie: _yapi_token=...; _yapi_uid=...`。
+- 若用户明确指定其他鉴权方式，按用户要求执行；否则保持 Cookie 优先。
 
-## 鉴权自动探测流程（拉取文档阶段）
+## 鉴权自动探测流程
 
-1. 先用轻量接口做可用性探测（如 `project/get` 或 `interface/list`）。
-2. 若返回登录态错误（如 `errcode=40011` / “请登录”），自动切换并重试 Cookie 鉴权。
-3. 一旦某种方式成功，本次会话固定使用该方式继续分页拉取与详情拉取。
+1. 先用轻量接口做可用性探测。
+2. 若返回登录态错误，自动切换并重试 Cookie 鉴权。
+3. 一旦某种方式成功，本次会话固定使用该方式继续拉取。
 4. 若所有方式失败，向用户说明失败原因与已尝试方案，再退化为让用户提供可访问的导出文档内容。
 
-## 第一版范围
+## V1 范围
 
-**支持**
+支持：
+- 仅 YApi 开放平台/同源接口拉取与业务 `api.ts` / `model.ts` 生成。
+- 用户仅在聊天中提供 `_yapi_uid`、`_yapi_token`；可选提供 YApi 根 URL。
+- 输出路径固定：`src/api/api.ts`、`src/models/model.ts`。
 
-- 仅 **YApi** 开放平台/同源接口（鉴权后拉取项目与接口列表、单接口详情）。
-- 用户 **仅在聊天中** 提供 `_yapi_uid`（项目 id）、`_yapi_token`（token）；可选提供 **YApi 根 URL**（如 `https://yapi.example.com`）。不要求编辑项目配置文件，不要求用户准备中间 JSON 文件。
-- 输出路径固定：**`src/api/api.ts`**、**`src/models/model.ts`**（相对当前工作区/项目根）。
-
-**不支持**
-
-- 非 YApi 平台、Vue/页面代码、把本流程写成 Rule。
+不支持：
+- 非 YApi 平台直接替代 V1 拉取流程。
+- 把本流程写成 Rule。
 
 ## 规范优先级
 
-1. 若用户在本次对话中提供了 **Markdown 代码生成规范**，则 **优先** 按其执行（与下条冲突时以用户规范为准）。
-2. 否则读取并遵循本 Skill 内置规范：**[references/default-codegen-spec.md](references/default-codegen-spec.md)**。
+1. 若用户在本次对话中提供了 Markdown 代码生成规范，则优先按其执行。
+2. 否则读取并遵循本 skill 内置规范：`references/default-codegen-spec.md`。
 
-## 核心工作流
+## V1 核心工作流
 
-1. **收集上下文**（从当前聊天读取；缺失则简短追问一次）
-   - 必填：`_yapi_uid`、`_yapi_token`
-   - 强烈建议：`YApi base URL`（无协议前缀时补 `https://`）。若用户只说「内网地址」，仍须追问可请求的完整根 URL。
-2. **拉取文档**（使用 `fetch` 或 axios；**依赖网络**；见上文「运行前提」）
-   - **`_yapi_uid`、`_yapi_token`、YApi `base URL` 仅用于本步**，不得写入生成的业务 `api.ts`。
-   - 鉴权执行遵循「Cookie 优先 + 自动探测」：默认优先 `_yapi_uid/_yapi_token` Cookie；失败时按探测流程回退。
-   - 在 YApi `base URL` 上调用 YApi 开放接口（常见形态如下；若实例版本不同，以实际返回为准并容错）：
-     - `GET /api/project/get?token={_yapi_token}` — 校验 token、拿项目元信息（请求参数名为 token；其值来自聊天字段 `_yapi_token`）
-     - `GET /api/interface/list?project_id={_yapi_uid}&token={_yapi_token}&page={n}&limit={pageSize}` — 分页拉取接口列表（请求参数名为 project_id/token；其值来自聊天字段 `_yapi_uid`/`_yapi_token`），**循环直至无更多数据**
-     - 对每条接口必要时 `GET /api/interface/get?id={interface_id}&token={_yapi_token}` — 补全 path、method、req_query、req_headers、req_body_type、req_body_form、req_body_other、res_body 等
-   - 将原始 JSON **整理为结构化清单**：每个接口包含 method、path、标题、说明、path/query/body/form/header 参数、响应结构线索（JSON Schema / JSON 示例）。
-3. **生成代码**（业务接口层，与 YApi 拉取凭证解耦）
-   - 按规范文件生成 **`src/api/api.ts`**（业务后端请求层）与 **`src/models/model.ts`**。
-   - 生成的 `api.ts` 面向 **YApi 文档中所描述的业务 API**（path/method/入参/响应）；**不要**把 YApi `token`、YApi 服务 `base URL`、YApi 开放接口的响应包裹形态默认写进该文件。
-   - **默认 HTTP 客户端**：axios（用户明确要求其他封装时再换）。
-4. **写入文件**
-   - 覆盖或创建上述两个路径；若项目已有同名文件，合并策略：**以本次 YApi 文档为准完整重写该职责范围内的导出**（或用户另有说明时从其说明），避免半残混合 unless 用户要求增量。
+1. 收集上下文：读取 `_yapi_uid`、`_yapi_token`，缺失时简短追问一次；必要时补 `base URL`。
+2. 拉取文档：按鉴权规则调用 YApi 接口，获取项目、接口列表与必要详情。
+3. 整理结构：抽取 method、path、标题、说明、path/query/body/form/header 参数、响应结构线索。
+4. 生成代码：按规范生成业务 `src/api/api.ts` 与 `src/models/model.ts`。
+5. 写入文件：默认覆盖该职责范围内的导出；用户另有说明时按用户要求处理。
 
-## 生成物要点（摘要）
+## V1 生成物要点
 
-详细规则见 [references/default-codegen-spec.md](references/default-codegen-spec.md)。
+详细规则见 `references/default-codegen-spec.md`。
 
-- **api.ts**：TypeScript **业务请求层**；区分 path / query / body / form-data / headers；请求与响应类型；函数命名优先级：**可复用的 `operationId`** → **接口标题/摘要** → **`method + path` 语义**（均 camelCase，避免 `getData1` 等含糊名）；每接口简短注释（标题、Method、Path、说明）；尽量少 `any`。**不要**默认生成仅适用于 YApi 开放接口的 `YApiResponse<T>`；仅当业务文档明确统一响应包裹时才生成如 `ApiResponse<T>`。
-- **model.ts**：`ModelBase`、`DataModel`、`Column` 均从 **`@model-base/core`** 导入；类名 **`XxxModel`**；属性与 TS 类型字段一律 **camelCase**。**仅风格差异**（camelCase vs snake_case）优先依赖 **ModelBase 官方命名策略与默认序列化/反序列化**，**不要**为每个字段机械加 `@Column({ name: '...' })`；**仅当后端字段名与前端属性是明确别名关系**（不仅是风格差异）时才使用 **`@Column({ name: 'raw_field_name' })`**。嵌套/数组/懒加载写法严格按官网（如 `@Column({ model: AddressModel })`、`@Column({ model: OrderItemModel, default: () => [] })`、`@Column({ model: () => ChildModel })`）。时间默认 **`string`**；**serialize / deserialize** 仅在用户明确要求且与官网一致时使用。**禁止**发明非官网的装饰器参数或映射约定。
+- `api.ts`：TypeScript 业务请求层；区分 path / query / body / form-data / headers；生成请求与响应类型；尽量少 `any`。
+- `model.ts`：`ModelBase`、`DataModel`、`Column` 从 `@model-base/core` 导入；按既有规范生成模型与字段映射。
 
-## 降级与容错
+## V1 降级与容错
 
-文档缺失字段时：**不中断整次生成**；用 `optional`、`unknown`、或带 **`TODO:`** 的注释标明不确定处；仍输出尽可能可编译、可调用的代码。详见规范文件。
+- 文档字段缺失时不中断整次生成。
+- 用 `optional`、`unknown` 或带 `TODO:` 的注释标明不确定处。
+- 仍输出尽可能可编译、可调用的代码。
+
+## V3 能力：页面生成上下文准备
+
+V3 不直接生成完整页面代码，只负责整合输入、推断页面信息并产出中间物。
+V3 不是替代 V1，而是建立在 V1 产物之上的补充能力。
+V3 的关键输入之一是 V1 已生成的 `api.ts` / `model.ts`。
+
+### V3 输入
+
+必需输入：
+- PRD（PDF 或飞书在线文档）
+- Figma 页面链接
+- V1 已生成的 `api.ts`
+- V1 已生成的 `model.ts`
+
+默认优先读取 V1 默认输出路径：
+- `src/api/api.ts`
+- `src/models/model.ts`
+
+用户显式指定时可覆盖。
+
+可选覆盖项：
+- `outputDir`
+- `referencePagePath`
+- `uiLibrary`
+- `pageType`
+
+### 输入策略
+
+- 默认优先自动推断，尽量减少手填参数。
+- 只有推断不稳或信息缺失时，才要求补充覆盖项。
+- 覆盖项一旦提供，以用户输入为准。
+
+### 三源职责
+
+- API：数据真实性来源。
+- PRD：业务语义来源。
+- Figma：布局与视觉来源。
+
+### 推断规则
+
+- `pageType`：从 PRD / Figma / API 联合推断。
+- `module`：从 Figma 页面名 / PRD 标题 / API 命名推断。
+- `uiLibrary` 优先级：
+  1. 用户指定
+  2. 项目已有依赖
+  3. 默认：Arco > Element > Ant
+
+### 输出物
+
+V3.0 目标是先产出统一上下文文件，本阶段不要求直接生成完整页面代码。
+- `page.manifest.json`：统一页面中间层，承载页面类型、模块、字段、动作、数据来源、映射、冲突与 TODO。
+- `cursor-page-prompt.md`：给 Cursor 生成页面代码的 prompt，基于 manifest 组织实现指令。
+
+### 冲突处理
+
+- PRD 有字段但 API 无：标记 `TODO(api-missing-field)`。
+- Figma 有按钮但 API 无动作：保留结构并标记 `TODO(api-missing-action)`。
+- API 有字段但 PRD 无说明：接入并标记 `TODO(prd-missing-semantic)`。
+- 命名不一致：允许映射，并记录 `conflict` / `TODO`。
+
+### 失败与兜底
+
+- 缺少 PRD / Figma / `api.ts` / `model.ts` 时要明确处理缺失项。
+- 推断不稳时不能静默高风险猜测。
+- 优先输出带 `TODO` / `conflict` 的结果。
+- 关键输入缺失且无法替代时可中断，并给出最小补充清单。
 
 ## 自动 / 手动触发
 
-- **自动**：描述字段已包含英文与中文触发词（YApi、API 生成、api.ts、model.ts、请求层、鉴权文档等），相关意图下应优先匹配本 Skill。
-- **手动**：用户可输入 **`yapi-doc-to-code`** 或本 Skill 名称以显式触发。
+- V1：当用户要根据接口文档生成 `api.ts` / `model.ts` 时触发。
+- V3：当用户已具备 PRD、Figma 与 V1 产物，希望生成页面上下文或 `cursor-page-prompt.md` 时触发。
+- 自动：当用户提到 YApi、api.ts、model.ts、请求层、鉴权文档、PRD、Figma、页面生成、manifest、页面 prompt 等相关意图时，应优先匹配本 skill。
+- 手动：用户可输入 `yapi-doc-to-code` 或本 skill 名称显式触发。
 
 ## 附加资源
 
-- 默认代码生成细则：**[references/default-codegen-spec.md](references/default-codegen-spec.md)**
+- 默认代码生成细则：`references/default-codegen-spec.md`
